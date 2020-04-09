@@ -11,12 +11,14 @@ import (
 const purpose = "bcast"
 
 func main() {
-	ring.Init()
+	innPort := os.Args[1]
+	ring.Init(innPort)
 	reader := bufio.NewReader(os.Stdin)
+	go listenRoutine()
 	for {
 		fmt.Print("Enter text: ")
 		text, _ := reader.ReadString('\n')
-		if ring.SendMessage(purpose, []bytes(text)) {
+		if ring.BroadcastMessage(purpose, []byte(text)) {
 			fmt.Println("Sending succesful!")
 		} else {
 			fmt.Println("Sending failed")
@@ -25,8 +27,11 @@ func main() {
 }
 
 func listenRoutine() {
+	receiver := ring.GetReceiver(purpose)
 	for {
-		recivedBytes := ring.Recive(purpose)
-		fmt.Println(string(recivedBytes))
+		select {
+		case msg := <-receiver:
+			fmt.Println("Received: " + string(msg))
+		}
 	}
 }

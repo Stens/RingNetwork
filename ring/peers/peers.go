@@ -1,6 +1,7 @@
 package peers
 
 import (
+	"fmt"
 	"net"
 	"strings"
 )
@@ -27,22 +28,14 @@ type ControlSignal struct {
 
 var controlChannel = make(chan ControlSignal, 100)
 
-type ChangeEvent struct {
-	Event string // Added or Removed
-	Peer  string
-}
-
-var changeChannel = make(chan ChangeEvent, 100)
-
 // Local variables
-var isInitialized = false
 var localIP string
+var err error // Fucking go
 
 // Set takes an array of IP addresses, DELETES all existing
 // peers and adds the new IP addresses instead, in the same
 // order as they appear in the IPs array.
 func Set(IPs []string) {
-	initialize()
 	controlSignal := ControlSignal{
 		Command: Replace,
 		Payload: IPs,
@@ -51,7 +44,6 @@ func Set(IPs []string) {
 }
 
 func BecomeHead() {
-	initialize()
 	controlSignal := ControlSignal{
 		Command: Head,
 	}
@@ -60,7 +52,6 @@ func BecomeHead() {
 
 // Remove deletes the peer with a certain IP
 func Remove(IP string) {
-	initialize()
 	controlSignal := ControlSignal{
 		Command: Delete,
 		Payload: []string{IP},
@@ -71,31 +62,22 @@ func Remove(IP string) {
 // AddTail takes an IP address in the form of a string,
 // and adds it at the end of the list of peers, thus
 // creating a new tail. It returns nothing
-func AddTail(IP string) {
-	initialize()
+func AddTail(IP string) bool {
+	if stringInSlice(IP, GetAll()) {
+		return false
+	}
 	controlSignal := ControlSignal{
 		Command: Append,
 		Payload: []string{IP},
 	}
-	controlChannel <- controlSignal
-}
 
-// PollUpdate blocks until a new change has occured in the peers
-// when such a change has occured, it returns a ChangeEvent struct
-// which has the following format:
-// type ChangeEvent struct {
-// 		Event string // Added or Removed
-//		Peer  string
-// }
-func PollUpdate() ChangeEvent {
-	initialize()
-	return <-changeChannel
+	controlChannel <- controlSignal
+	return true
 }
 
 // GetAll returns the array of peers in the correct order
 // so the first element is HEAD and the last element is Tail
 func GetAll() []string {
-	initialize()
 	controlSignal := ControlSignal{
 		Command:         Get,
 		ResponseChannel: make(chan []string),
@@ -111,7 +93,6 @@ func GetAll() []string {
 // and offset=1, it returns the peer AFTER Self, and with offset=-1 it returns
 // the peer BEFORE Self.
 func GetRelativeTo(role int, offset int) string {
-	initialize()
 	peers := GetAll()
 
 	var indexOfRole int
@@ -137,13 +118,15 @@ func GetRelativeTo(role int, offset int) string {
 	return peers[indexWithOffset]
 }
 
-func initialize() {
-	if isInitialized {
-		return
+func Init(connectPort string) error {
+	localIP, err = getLocalIP()
+	if err != nil {
+		return err
 	}
-	isInitialized = true
-	localIP, _ = getLocalIP()
+	localIP = localIP + ":" + connectPort
+	fmt.Println(localIP)
 	go peersServer()
+	return nil
 }
 
 func peersServer() {
@@ -158,21 +141,11 @@ func peersServer() {
 
 		case Append:
 			peers = append(peers, controlSignal.Payload...)
-			for _, newPeer := range controlSignal.Payload {
-				changeEvent := ChangeEvent{
-					Event: Added,
-					Peer:  newPeer,
-				}
-				changeChannel <- changeEvent
-			}
 			break
 
 		case Replace:
 			peers = controlSignal.Payload
-			changeEvent := ChangeEvent{
-				Event: Replaced,
-			}
-			changeChannel <- changeEvent
+
 			break
 
 		case Head:
@@ -200,11 +173,6 @@ func peersServer() {
 					copy(peers[i:], peers[i+1:]) // Shift peers[i+1:] left one index.
 					peers[len(peers)-1] = ""     // Erase last element (write zero value).
 					peers = peers[:len(peers)-1] // Truncate slice.
-					changeEvent := ChangeEvent{
-						Event: Removed,
-						Peer:  peer,
-					}
-					changeChannel <- changeEvent
 					break
 				}
 			}
@@ -238,18 +206,15 @@ func IsAlone() bool {
 }
 
 func IsHead() bool {
-	return GetRelativeTo(Head, 0) == GetRelativeTo(Tail, 0)
+	return GetRelativeTo(Head, 0) == GetRelativeTo(Self, 0)
 }
 
-func NextIsTail() bool {
+func IsNextTail() bool {
 	return GetRelativeTo(Self, 1) == GetRelativeTo(Tail, 0)
 }
 
-func GetNextNode() string {
+func GetNextPeer() string {
 	return GetRelativeTo(Self, 1)
-}
-func GetSelf() string {
-	return localIP
 }
 
 func getLocalIP() (string, error) {
@@ -259,4 +224,32 @@ func getLocalIP() (string, error) {
 	}
 	defer conn.Close()
 	return strings.Split(conn.LocalAddr().String(), ":")[0], nil
+}
+
+func stringInSlice(a string, list []string) bool {
+	for _, b := range list {
+		if b == a {
+			return true
+		}
+	}
+	return false
+}
+
+func difference(slice1 []string, slice2 []string) (string, bool) {
+	for _, s1 := range slice1 {
+		found := false
+		for _, s2 := range slice2 {
+			if s1 == s2 {
+				found = true
+				break
+			}
+		}
+		// String not found.
+		if !found {
+			return s1, true
+		}
+	}
+	// Swap the slices, only if it was the first loop
+	slice1, slice2 = slice2, slice1
+	return "", false
 }
