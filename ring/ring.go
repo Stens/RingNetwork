@@ -177,7 +177,10 @@ func nonBlockingRead(readChn chan<- string) { // This is iffy, was a quick fix
 
 	defer connRead.Close()
 	for {
-		nBytes, _, _ := connRead.ReadFrom(buffer[0:]) // Fuck errors
+		nBytes, _, err := connRead.ReadFrom(buffer[0:]) // Fuck errors
+		if err != nil {
+			continue
+		}
 		msg := string(buffer[:nBytes])
 		splittedMsg := strings.SplitN(msg, "-", 2)
 		self := peers.GetRelativeTo(peers.Self, 0)

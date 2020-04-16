@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"reflect"
+	"sync"
 	"time"
 
 	"../receivers"
@@ -25,10 +27,14 @@ type Message struct {
 	Type           int    // Broadcast or Ping or PingAck
 	SenderHostname string // Only necessary for Broadcast (we need to know where it started...)
 	Data           []byte
+	ExpiresAt      time.Time
 }
 
 // Variables
 var gInnPort string
+var localHostname string
+var gBacklog []Message
+var gBacklogMutex sync.Mutex
 
 //Public channels
 var DisconnectedFromServerChannel = make(chan string)
@@ -43,11 +49,16 @@ var gSendBackwardChannel = make(chan Message, 100)
 
 func Init(innPort string) {
 	gInnPort = innPort
+	localHostname = peers.GetRelativeTo(peers.Self, 0)
 	go client()
 	go server()
+	go backlogWatcher()
 }
 
 func ConnectTo(hostname string) error {
+	if peers.IsAlone() {
+		return nil
+	}
 	gServerHostnameChannel <- hostname
 	select {
 	case <-gConnectedToServerChannel:
@@ -61,18 +72,62 @@ func ConnectTo(hostname string) error {
 // to the node which it is connected to by ConnectTo
 // purpose is used to filter the message on the receiving end
 func SendMessage(purpose string, data []byte) bool {
-	if peers.IsAlone() {
-		return false
-	}
-	localHostname := peers.GetRelativeTo(peers.Self, 0)
+	// if peers.IsAlone() {
+	// 	return false
+	// }
+	expire := time.Now().Local().Add(
+		time.Second * time.Duration(10))
 	message := Message{
 		Purpose:        purpose,
 		Type:           Broadcast,
 		SenderHostname: localHostname,
 		Data:           data,
+		ExpiresAt:      expire,
 	}
+	addToBacklog(message)
 	gSendForwardChannel <- message
 	return true
+}
+
+func backlogWatcher() {
+	for {
+		select {
+		case <-time.After(500 * time.Millisecond):
+			gBacklogMutex.Lock()
+			fmt.Println(len(gBacklog))
+			for i, msg := range gBacklog {
+				if msg.ExpiresAt.Before(time.Now()) {
+					copy(gBacklog[i:], gBacklog[i+1:])    // Shift gBacklog[i+1:] left one index.
+					gBacklog[len(gBacklog)-1] = Message{} // Erase last element (write zero value).
+					gBacklog = gBacklog[:len(gBacklog)-1] // Truncate slice.
+					DisconnectedFromServerChannel <- peers.GetNextPeer()
+					break
+				} else {
+					gSendForwardChannel <- msg
+				}
+			}
+			gBacklogMutex.Unlock()
+		}
+	}
+}
+
+func addToBacklog(msg Message) {
+	gBacklogMutex.Lock()
+	defer gBacklogMutex.Unlock()
+	gBacklog = append(gBacklog, msg)
+}
+
+func removeFromBacklog(removeMsg Message) {
+	gBacklogMutex.Lock()
+	defer gBacklogMutex.Unlock()
+	for i, msg := range gBacklog {
+		if reflect.DeepEqual(msg, removeMsg) {
+			copy(gBacklog[i:], gBacklog[i+1:])    // Shift gBacklog[i+1:] left one index.
+			gBacklog[len(gBacklog)-1] = Message{} // Erase last element (write zero value).
+			gBacklog = gBacklog[:len(gBacklog)-1] // Truncate slice.
+			break
+		}
+	}
 }
 
 func GetReceiver(purpose string) chan []byte {
@@ -109,7 +164,7 @@ func handleOutboundConnection(server string, shouldDisconnectChannel chan bool) 
 
 	gConnectedToServerChannel <- server
 
-	shouldSendPingTicker := time.NewTicker(800 * time.Millisecond)
+	shouldSendPingTicker := time.NewTicker(200 * time.Millisecond)
 
 	pingAckReceivedChannel := make(chan Message, 100)
 	connErrorChannel := make(chan error)
@@ -139,8 +194,8 @@ func handleOutboundConnection(server string, shouldDisconnectChannel chan bool) 
 				// Cannot retrieve PingAck, so the connection is
 				// not working properly
 
-				err = errors.New("ERR_SERVER_DISCONNECTED")
-				return
+				// err = errors.New("ERR_SERVER_DISCONNECTED")
+				// return
 			}
 			break
 
@@ -185,6 +240,7 @@ func server() {
 func handleIncomingConnection(conn net.Conn, shouldDisconnectChannel chan bool) {
 	defer conn.Close()
 
+	// shouldSendPingAckTicker := time.NewTicker(800 * time.Millisecond)
 	messageReceivedChannel := make(chan Message, 100)
 	connErrorChannel := make(chan error)
 
@@ -209,6 +265,8 @@ func handleIncomingConnection(conn net.Conn, shouldDisconnectChannel chan bool) 
 					// We should forward the message to next node
 					receivers.GetChannel(messageReceived.Purpose) <- messageReceived.Data
 					gSendForwardChannel <- messageReceived
+				} else {
+					removeFromBacklog(messageReceived)
 				}
 
 				break
@@ -224,6 +282,12 @@ func handleIncomingConnection(conn net.Conn, shouldDisconnectChannel chan bool) 
 		case <-shouldDisconnectChannel:
 			return
 
+		// case <-shouldSendPingAckTicker.C:
+		// 	messageToSend := Message{
+		// 		Type: PingAck,
+		// 	}
+		// 	gSendBackwardChannel <- messageToSend
+		// 	break
 		case <-connErrorChannel:
 			return
 		}
@@ -257,7 +321,7 @@ func sendMessages(conn net.Conn, messageToSendChannel chan Message, errorChannel
 		if err != nil {
 			// We need to retransmit the message, to pass it back to the channel.
 			// However, the connection is not working so disconnect.
-			messageToSendChannel <- messageToSend
+			// messageToSendChannel <- messageToSend
 			errorChannel <- err
 			return
 		}
