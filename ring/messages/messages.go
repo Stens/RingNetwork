@@ -22,6 +22,8 @@ const (
 	PingAck
 )
 
+const MessageLifeTime = 10
+
 type Message struct {
 	Purpose        string
 	Type           int    // Broadcast or Ping or PingAck
@@ -76,7 +78,7 @@ func SendMessage(purpose string, data []byte) bool {
 	// 	return false
 	// }
 	expire := time.Now().Local().Add(
-		time.Second * time.Duration(10))
+		time.Second * time.Duration(MessageLifeTime))
 	message := Message{
 		Purpose:        purpose,
 		Type:           Broadcast,
@@ -89,7 +91,7 @@ func SendMessage(purpose string, data []byte) bool {
 	return true
 }
 
-func backlogWatcher() {
+func backlogWatcher() { // Yaousa!
 	for {
 		select {
 		case <-time.After(500 * time.Millisecond):
@@ -186,7 +188,7 @@ func handleOutboundConnection(server string, shouldDisconnectChannel chan bool) 
 				Type: Ping,
 			}
 			gSendForwardChannel <- messageToSend
-			select {
+			select { // Remove?
 			case <-pingAckReceivedChannel:
 				// We received a PingAck, so everything works fine
 				break
@@ -240,7 +242,6 @@ func server() {
 func handleIncomingConnection(conn net.Conn, shouldDisconnectChannel chan bool) {
 	defer conn.Close()
 
-	// shouldSendPingAckTicker := time.NewTicker(800 * time.Millisecond)
 	messageReceivedChannel := make(chan Message, 100)
 	connErrorChannel := make(chan error)
 
@@ -270,7 +271,7 @@ func handleIncomingConnection(conn net.Conn, shouldDisconnectChannel chan bool) 
 				}
 
 				break
-			case Ping:
+			case Ping: // Remove?
 				messageToSend := Message{
 					Type: PingAck,
 				}
@@ -282,12 +283,6 @@ func handleIncomingConnection(conn net.Conn, shouldDisconnectChannel chan bool) 
 		case <-shouldDisconnectChannel:
 			return
 
-		// case <-shouldSendPingAckTicker.C:
-		// 	messageToSend := Message{
-		// 		Type: PingAck,
-		// 	}
-		// 	gSendBackwardChannel <- messageToSend
-		// 	break
 		case <-connErrorChannel:
 			return
 		}
@@ -319,9 +314,6 @@ func sendMessages(conn net.Conn, messageToSendChannel chan Message, errorChannel
 		_, err := fmt.Fprintf(conn, string(serializedMessage)+"\n\000")
 
 		if err != nil {
-			// We need to retransmit the message, to pass it back to the channel.
-			// However, the connection is not working so disconnect.
-			// messageToSendChannel <- messageToSend
 			errorChannel <- err
 			return
 		}
