@@ -234,22 +234,3 @@ func stringInSlice(a string, list []string) bool {
 	}
 	return false
 }
-
-func difference(slice1 []string, slice2 []string) (string, bool) {
-	for _, s1 := range slice1 {
-		found := false
-		for _, s2 := range slice2 {
-			if s1 == s2 {
-				found = true
-				break
-			}
-		}
-		// String not found.
-		if !found {
-			return s1, true
-		}
-	}
-	// Swap the slices, only if it was the first loop
-	slice1, slice2 = slice2, slice1
-	return "", false
-}

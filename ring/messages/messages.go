@@ -151,7 +151,8 @@ func client() {
 }
 
 func handleOutboundConnection(server string, shouldDisconnectChannel chan bool) {
-	conn, err := net.Dial("tcp", server)
+	tcpAddr, _ := net.ResolveTCPAddr("tcp4", server)
+	conn, err := net.DialTCP("tcp", nil, tcpAddr)
 	if err != nil {
 		fmt.Printf("TCP client connect error: %s", err)
 		return
@@ -166,7 +167,7 @@ func handleOutboundConnection(server string, shouldDisconnectChannel chan bool) 
 
 	gConnectedToServerChannel <- server
 
-	shouldSendPingTicker := time.NewTicker(200 * time.Millisecond)
+	shouldSendPingTicker := time.NewTicker(5 * time.Second)
 
 	pingAckReceivedChannel := make(chan Message, 100)
 	connErrorChannel := make(chan error)
@@ -188,18 +189,18 @@ func handleOutboundConnection(server string, shouldDisconnectChannel chan bool) 
 				Type: Ping,
 			}
 			gSendForwardChannel <- messageToSend
-			select { // Remove?
-			case <-pingAckReceivedChannel:
-				// We received a PingAck, so everything works fine
-				break
-			case <-time.After(1 * time.Second):
-				// Cannot retrieve PingAck, so the connection is
-				// not working properly
-
-				// err = errors.New("ERR_SERVER_DISCONNECTED")
-				// return
-			}
+		// select { // Remove?
+		case <-pingAckReceivedChannel:
+			// We received a PingAck, so everything works fine
 			break
+			// case <-time.After(1 * time.Second):
+			// 	// Cannot retrieve PingAck, so the connection is
+			// 	// not working properly
+
+			// 	// err = errors.New("ERR_SERVER_DISCONNECTED")
+			// 	// return
+			// }
+			// break
 
 		case <-shouldDisconnectChannel:
 			fmt.Printf("Disconnecting from: %s\n", server)
