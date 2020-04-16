@@ -74,9 +74,9 @@ func ConnectTo(hostname string) error {
 // to the node which it is connected to by ConnectTo
 // purpose is used to filter the message on the receiving end
 func SendMessage(purpose string, data []byte) bool {
-	// if peers.IsAlone() {
-	// 	return false
-	// }
+	if peers.IsAlone() {
+		return false
+	}
 	expire := time.Now().Local().Add(
 		time.Second * time.Duration(MessageLifeTime))
 	message := Message{
